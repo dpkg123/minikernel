@@ -1,0 +1,1 @@
+#define linux 1
