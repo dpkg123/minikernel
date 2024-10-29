@@ -1,51 +1,74 @@
-; boot.asm
-BITS 32                   ; 使用 32 位代码模式
-extern kernel_main        ; 声明外部函数 kernel_main
+; boot.asm - 简单的 BIOS 启动程序，加载内核和 RAMDisk
+BITS 16
+ORG 0x7C00
 
-SECTION .text
 start:
-    cli                   ; 禁用中断
-    xor ax, ax            ; 清除数据段寄存器
-    mov ds, ax
-    mov es, ax
+    cli
+    mov ax, 0x07C0
+    add ax, 288
     mov ss, ax
-    mov sp, 0x9fbf        ; 初始化栈指针
+    mov sp, 4096
 
-    ; 加载保护模式
+    ; 加载内核到 0x1000
+    mov bx, 0x1000
+    mov dh, 1
+    call load_kernel
+
+    ; 加载 RAMDisk 到 0x8000
+    mov bx, 0x8000       ; RAMDisk 地址
+    mov dh, 64           ; 加载 64 扇区
+    call load_ramdisk
+
+    call enable_protected_mode
+    jmp 0x08:kernel_start
+
+load_kernel:
+    mov ah, 0x02
+    mov al, dh
+    mov ch, 0
+    mov cl, 2
+    mov dh, 0
+    int 0x13
+    jc disk_error
+    ret
+
+load_ramdisk:
+    mov ah, 0x02
+    mov al, dh
+    mov ch, 0
+    mov cl, 3           ; RAMDisk 从第 3 扇区开始
+    mov dh, 0
+    int 0x13
+    jc disk_error
+    ret
+
+disk_error:
+    hlt
+
+enable_protected_mode:
+    in al, 0x64
+    or al, 0x02
+    out 0x64, al
+
+    lgdt [gdt_descriptor]
     mov eax, cr0
-    or eax, 1             ; 设置保护模式位
+    or eax, 1
     mov cr0, eax
+    ret
 
-    ; 跳转到保护模式
-    jmp CODE_SEG:init_pm
+[bits 32]
+kernel_start:
+    call kernel_main
 
-[SECTION .gdt]
 gdt_start:
-    dq 0x0000000000000000 ; 空描述符
-    dq 0x00cf9a000000ffff ; 代码段描述符
-    dq 0x00cf92000000ffff ; 数据段描述符
+gdt_null: dq 0
+gdt_code: dw 0xFFFF, 0x0000, 0x00, 10011010b, 11001111b, 0x00
+gdt_data: dw 0xFFFF, 0x0000, 0x00, 10010010b, 11001111b, 0x00
 gdt_end:
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
     dd gdt_start
 
-[SECTION .text]
-CODE_SEG EQU 0x08
-DATA_SEG EQU 0x10
-
-init_pm:
-    lgdt [gdt_descriptor] ; 加载 GDT
-    mov ax, DATA_SEG
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-    mov esp, 0x9fbf       ; 设置栈指针
-
-    call kernel_main      ; 调用 C 内核入口
-
-    cli                   ; 禁用中断
-    hlt                   ; 停止 CPU
-
+times 510-($-$$) db 0
+dw 0xAA55
